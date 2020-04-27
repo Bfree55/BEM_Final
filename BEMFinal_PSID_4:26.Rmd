@@ -1,0 +1,177 @@
+---
+title: "BEM Project"
+author: "Brandon Freeman"
+date: "3/28/2020"
+output: pdf_document
+---
+
+```{r}
+install.packages("tidymodels")
+install.packages("rstanarm")
+library(tidymodels)
+```
+
+
+109 is start of well-being (in PSID)
+WB_AF_happy == our important variable (variable number 43 in WB_NA_WB)
+
+## Data Cleaning
+```{r remove N/A}
+PSID_NA <- na.omit(PSID)
+```
+
+```{r create model specification}
+tree_spec <- decision_tree(cost_complexity = tune(),
+                           tree_depth = 5,
+                           mode = "classification")%>%
+  set_engine("rpart")
+grid <- expand_grid(cost_complexity = seq(.01, .1, by = .01))
+```
+
+## Wellebing
+```{r isolate wellbeing variables}
+PSID_NA_WB <- PSID_NA[,151]
+
+y <- 2
+for (x in 109:150) {
+  PSID_NA_WB[,y] <- PSID_NA[,x]
+  y <- y+1
+}
+for (x in 152:184){
+  PSID_NA_WB[,y] <- PSID_NA[,x]
+  y <- y+1
+}
+
+PSID_NA_WB <- PSID_NA_WB[,-4:-6]
+```
+
+# Backwards elimination
+```{r backward elimination}
+step(lm(WB_AF_happy~., data = PSID_NA_WB), direction = "backward")
+```
+
+
+
+## Family
+```{r isolate family variables}
+PSID_NA_FAM <-PSID_NA_WB[,1]
+ which( colnames(PSID_NA_FAM)=="fam68ID" )
+y <-2
+for (x in 2:39) {
+  PSID_NA_FAM[,y] <- PSID_NA[,x]
+  y <- y+1
+}
+
+for (x in 49:103) {
+    PSID_NA_FAM[,y] <- PSID_NA[,x]
+  y <- y+1
+}
+
+for (x in 185:186) {
+    PSID_NA_FAM[,y] <- PSID_NA[,x]
+  y <- y+1
+}
+PSID_NA_FAM <-PSID_NA_FAM[, -which( colnames(PSID_NA_FAM)=="fam68ID" )]
+PSID_NA_FAM <-PSID_NA_FAM[, -which( colnames(PSID_NA_FAM)=="FAMIL_year" )]
+PSID_NA_FAM <-PSID_NA_FAM[, -which( colnames(PSID_NA_FAM)=="FAMIL_month" )]
+PSID_NA_FAM <-PSID_NA_FAM[, -which( colnames(PSID_NA_FAM)=="FAMIL_day" )]
+```
+
+# Backwards elimination
+```{r}
+step(lm(WB_AF_happy~., data = PSID_NA_FAM), direction = "backward")
+```
+
+
+## Individual
+```{r isolate individual variables}
+PSID_NA_IND <-PSID_NA_WB[,1]
+PSID_NA_IND[,2] <- PSID_NA[,187]
+
+y<-3
+for (x in 104:108) {
+  PSID_NA_IND[,y] <- PSID_NA[,x]
+  y<- y+1
+}
+
+```
+
+# Backwards elimination
+```{r}
+step(lm(WB_AF_happy~., data = PSID_NA_IND), direction = "backward")
+```
+
+## All variables
+```{r all variables together}
+PSID_NA_ALL <- PSID_NA_WB[,1]
+y<- 2
+for (x in 2:73) {
+  PSID_NA_ALL[,y] <- PSID_NA_WB[,x]
+  y <- y+1
+}
+
+for (x in 2:92) {
+  PSID_NA_ALL[,y] <- PSID_NA_FAM[,x]
+  y <- y+1
+}
+
+for (x in 2:7) {
+  PSID_NA_ALL[,y] <- PSID_NA_IND[,x]
+  y <- y+1
+}
+```
+
+# Backwards elimination
+
+```{r}
+step(lm(WB_AF_happy~., data = PSID_NA_ALL), direction = "backward")
+```
+
+#DECISION TREE- all variables
+```{r split data}
+ALL_split <- initial_split(PSID_NA_ALL, prop = 0.5)
+ALL_train <- training(ALL_split)
+ALL_test <- testing(ALL_split)
+```
+
+```{r cross validation}
+ALL_cv <- vfold_cv(ALL_train, v = 10)
+```
+
+```{r fit model on cv}
+ALL_model <- tune_grid(tree_spec,WB_AF_happy ~., resamples = ALL_cv)
+```
+```
+
+```{r find min MRSE}
+ALL_model%>%
+  collect_metrics()%>%
+  filter(.metric == "rmse")%>%
+  arrange(mean)
+```
+
+```{r select alpha}
+ALL_final_complexity <- ALL_model%>%
+  select_best(metric = "rmse")%>%
+  pull()
+```
+
+```{r final model}
+ALL_final_spec <- decision_tree(cost_complexity = final_complexity,
+                            tree_depth = 5,
+                            mode = "classification")%>%
+  set_engine("rpart")
+
+ALL_final_model <- fit(final_spec, WB_AF_happy ~., data= ALL_train)
+```
+might put heatmap here instead of this test. may be good to include both
+```{r rmse on test}
+ALL_final_model%>%
+  predict(new_data = ALL_test)%>%
+  bind_cols(ALL_test)%>%
+  metrics(truth = WB_AF_happy, estimate = .pred)
+```
+
+```{r plot decision tree}
+rpart.plot(ALL_final_model$fit, roundint = FALSE)
+```
